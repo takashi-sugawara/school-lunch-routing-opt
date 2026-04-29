@@ -26,7 +26,7 @@ TEXTS = {
     "desc_body": {
         "ja": """
 本デモは、立川市の実際の給食配送モデルをベースにした「時間枠付き複数拠点車両経路問題（MDVRPTW）」のシミュレーションです。
-以下のビジネス要件（制約条件）をすべて満たしつつ、最もコストが安くなるルートをAI（OR-Tools）が探索します。
+以下のビジネス要件（制約条件）をすべて満たしつつ、最もコストが安くなるルートを数理最適化エンジン（OR-Tools）が探索します。
 
 ### 🏫 配送エリアと対象校（立川市に固定）
 * **東共同調理場（みんなのくるりんキッチン）**
@@ -40,6 +40,7 @@ TEXTS = {
 ### ⏱️ 厳しい時間制約（Time Windows）
 * **配送完了枠 [11:00 - 11:30]**: 学校の運用上、必ずこの30分間に配送を完了させる必要があります。
 * **荷下ろし時間 [10分]**: 各学校での給食の積み下ろし作業に10分間を要します。
+* **トラックの積載容量制限**: 1台のトラックにつき、最大 **2校分** までしか積載できません（配送後はデポに戻る必要があります）。
 * **衛生管理基準（2時間ルール）**: 文部科学省の「調理終了から喫食開始まで2時間以内」を満たす必要があるため、トラックの出発可能時刻は **10:30以降** に制限されます。
 
 ### 💰 コストの算出基準
@@ -47,7 +48,7 @@ TEXTS = {
         """,
         "en": """
 This demo is a simulation of the "Multi-Depot Vehicle Routing Problem with Time Windows (MDVRPTW)" based on the actual school lunch delivery model in Tachikawa City.
-The AI (Google OR-Tools) will find the most cost-effective routes while strictly satisfying all business constraints below.
+The mathematical optimization engine (OR-Tools) will find the most cost-effective routes while strictly satisfying all business constraints below.
 
 ### 🏫 Delivery Areas and Target Schools
 * **East Joint Kitchen**
@@ -61,6 +62,7 @@ The AI (Google OR-Tools) will find the most cost-effective routes while strictly
 ### ⏱️ Strict Time Constraints (Time Windows)
 * **Delivery Window [11:00 - 11:30]**: Deliveries must be completed exactly within this 30-minute window due to school schedules.
 * **Unloading Time [10 mins]**: It takes 10 minutes to unload the lunches at each school.
+* **Capacity Constraint**: A single truck can carry meals for a maximum of **2 schools** (must return to depot afterwards).
 * **Hygiene Standard (2-Hour Rule)**: To meet the Ministry of Education's requirement of "eating within 2 hours after cooking finishes", trucks cannot depart before **10:30**.
 
 ### 💰 Cost Calculation Basis
@@ -73,9 +75,9 @@ The AI (Google OR-Tools) will find the most cost-effective routes while strictly
     "trucks_header": {"ja": "**🚚 稼働トラック数（ドライバー出勤数）**", "en": "**🚚 Active Trucks (Driver Availability)**"},
     "east_slider": {"ja": "東共同調理場 (通常12台)", "en": "East Kitchen (Default: 12)"},
     "west_slider": {"ja": "西共同調理場 (通常8台)", "en": "West Kitchen (Default: 8)"},
-    "search_time_slider": {"ja": "AIルート探索時間 (秒)", "en": "AI Search Time (sec)"},
+    "search_time_slider": {"ja": "最適化エンジン探索時間 (秒)", "en": "Optimization Engine Search Time (sec)"},
     "btn_run": {"ja": "🚀 最適化を実行する", "en": "🚀 Run Optimization"},
-    "spinner": {"ja": "最適化ルートを計算中... (AIが数千万の組み合わせから良解を探索中)", "en": "Calculating optimal routes... (AI is exploring millions of combinations)"},
+    "spinner": {"ja": "数理最適化エンジンが最良ルートを探索中...", "en": "The mathematical optimization engine is searching for the best routes..."},
     "success": {"ja": "✅ 最適化が完了しました！", "en": "✅ Optimization Complete!"},
     "kpi_header": {"ja": "### 📊 コスト削減・最適化ダッシュボード", "en": "### 📊 Cost Savings & Optimization Dashboard"},
     "kpi_trucks": {"ja": "稼働トラック台数", "en": "Active Trucks"},
@@ -132,12 +134,14 @@ def generate_real_data(lang="ja"):
         "West_Depot": [35.7190, 139.3900]
     }
     east_schools = [
+        # 小学校 8校
         [35.695, 139.415], [35.700, 139.420], [35.693, 139.425],
         [35.698, 139.405], [35.705, 139.418], [35.690, 139.430],
-        [35.692, 139.420], [35.715, 139.435], [35.694, 139.416],
-        [35.701, 139.422], [35.692, 139.426], [35.697, 139.406],
-        [35.706, 139.419], [35.691, 139.431], [35.693, 139.421],
-        [35.716, 139.436], [35.710, 139.428]
+        [35.692, 139.420], [35.715, 139.435],
+        # 中学校 9校 (ダミーからよりリアルな分散座標へ)
+        [35.705, 139.400], [35.710, 139.405], [35.698, 139.425],
+        [35.702, 139.430], [35.690, 139.410], [35.712, 139.420],
+        [35.718, 139.415], [35.688, 139.422], [35.708, 139.435]
     ]
     if lang == "ja":
         east_names = [
@@ -172,8 +176,8 @@ def generate_real_data(lang="ja"):
     east_addresses = [
         "立川市柴崎町2-20-3", "立川市曙町3-23-1", "立川市錦町3-4-1", "立川市富士見町4-4-1",
         "立川市高松町1-12-25", "立川市羽衣町2-29-22", "立川市錦町5-6-43", "立川市幸町2-1-1",
-        "立川市柴崎町(Dummy)", "立川市曙町(Dummy)", "立川市錦町(Dummy)", "立川市富士見町(Dummy)",
-        "立川市高松町(Dummy)", "立川市羽衣町(Dummy)", "立川市錦町(Dummy)", "立川市幸町(Dummy)", "立川市泉町(Dummy)"
+        "立川市柴崎町1-3-4", "立川市曙町3-29-46", "立川市羽衣町3-25-6", "立川市幸町5-49-1",
+        "立川市上砂町3-27-1", "立川市泉町786-16", "立川市西砂町6-28-3", "立川市富士見町7-24-1", "立川市若葉町3-19-5"
     ]
     west_addresses = [
         "立川市上砂町2-18-1", "立川市柏町1-31-1", "立川市西砂町2-34-2", "立川市栄町2-2-1",
@@ -216,6 +220,20 @@ def _t(key, **kwargs):
     return text
 
 locations, location_names, location_addresses = generate_real_data(lang)
+
+@st.cache_data
+def compute_distance_matrix(locs):
+    n = len(locs)
+    mat = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            if i == j: continue
+            mat[i][j] = haversine(locs[i][0], locs[i][1], locs[j][0], locs[j][1]) * 1.3
+    return mat
+
+# キャッシュして再計算を防ぐ（ミュータブルなリストの代わりにタプルを渡す）
+dist_matrix = compute_distance_matrix(tuple(map(tuple, locations)))
+num_locations = len(locations)
 
 st.title(_t("title"))
 st.markdown(_t("subtitle"))
@@ -260,9 +278,6 @@ if st.session_state.run_opt:
     with st.spinner(_t("spinner")):
         # ---------------------------------------------------------
         # 3. マトリックス計算とOR-Toolsモデル構築
-        # ---------------------------------------------------------
-        num_locations = len(locations)
-        dist_matrix = np.zeros((num_locations, num_locations))
         time_matrix = np.zeros((num_locations, num_locations), dtype=int)
         
         SPEED_KM_PER_H = 20.0 
@@ -271,9 +286,7 @@ if st.session_state.run_opt:
         for i in range(num_locations):
             for j in range(num_locations):
                 if i == j: continue
-                dist_km = haversine(locations[i][0], locations[i][1], locations[j][0], locations[j][1])
-                dist_km *= 1.3 
-                dist_matrix[i][j] = dist_km
+                dist_km = dist_matrix[i][j]
                 
                 travel_time = (dist_km / SPEED_KM_PER_H) * 60 * weather_multiplier
                 service = SERVICE_TIME if i >= 2 else 0
@@ -294,6 +307,19 @@ if st.session_state.run_opt:
         transit_callback_index = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
+        # 容量制約 (1台につき最大2校分)
+        demands = [0, 0] + [1] * 28
+        def demand_callback(from_index):
+            return demands[manager.IndexToNode(from_index)]
+        demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+        routing.AddDimensionWithVehicleCapacity(
+            demand_callback_index,
+            0,
+            [2] * num_vehicles,
+            True,
+            'Capacity'
+        )
+
         routing.AddDimension(
             transit_callback_index,
             30,  
@@ -309,7 +335,7 @@ if st.session_state.run_opt:
                 time_dimension.CumulVar(index).SetRange(0, 120)
             else:
                 time_dimension.CumulVar(index).SetRange(30, 60)
-                routing.AddDisjunction([index], 100000)
+                routing.AddDisjunction([index], 10000000)
 
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
         search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
@@ -391,7 +417,7 @@ if st.session_state.run_opt:
             COST_PER_KM = 32
             base_cost = baseline_dist * COST_PER_KM
             opt_cost = total_dist_optimized * COST_PER_KM
-            savings_per_day = base_cost - opt_cost
+            savings_per_day = max(0, base_cost - opt_cost)
             savings_per_year = savings_per_day * 200
 
             with tab1:
