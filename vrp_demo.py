@@ -308,7 +308,7 @@ with tab3:
         _t("col_lon"): [f"{loc[1]:.6f}" for loc in locations],
         _t("col_area"): [_t("area_east_depot"), _t("area_west_depot")] + [_t("area_east")]*17 + [_t("area_west")]*11
     })
-    st.dataframe(df_locations, use_container_width=True)
+    st.dataframe(df_locations, width='stretch')
 
 st.sidebar.header(_t("sidebar_header"))
 weather_options = {
@@ -407,6 +407,7 @@ if st.session_state.run_opt:
             map_polylines = []
             visited_nodes = set()
             school_labels = {}
+            export_data = []
             
             for vehicle_id in range(num_vehicles):
                 index = routing.Start(vehicle_id)
@@ -442,6 +443,14 @@ if st.session_state.run_opt:
                     
                     route_log += f"{location_names[node]}({time_str}) ➡️ "
                     
+                    export_data.append({
+                        "Truck_ID": f"{depot_name}-{vehicle_id + 1}",
+                        "Stop_Order": order - 1 if node >= 2 else 0,
+                        "Location_Name": location_names[node],
+                        "Address": location_addresses[node],
+                        "Arrival_Time": time_str
+                    })
+                    
                     previous_index = index
                     index = solution.Value(routing.NextVar(index))
                     # 次のノードへの距離を加算（最後の学校から帰還デポまでの距離もここで加算されます）
@@ -455,6 +464,14 @@ if st.session_state.run_opt:
                 arr_hour = total_minutes // 60
                 arr_minute = total_minutes % 60
                 route_log += f"{location_names[node]} ({_t('log_return')} {arr_hour:02d}:{arr_minute:02d})"
+                
+                export_data.append({
+                    "Truck_ID": f"{depot_name}-{vehicle_id + 1}",
+                    "Stop_Order": order,
+                    "Location_Name": location_names[node],
+                    "Address": location_addresses[node],
+                    "Arrival_Time": f"{arr_hour:02d}:{arr_minute:02d}"
+                })
                 
                 routes_text.append(route_log)
                 total_dist_optimized += route_dist
@@ -536,6 +553,16 @@ if st.session_state.run_opt:
                         folium.CircleMarker(loc, radius=6, color=marker_color, fill=True, fill_opacity=opacity, popup=popup_text).add_to(m)
                 
                 st_folium(m, width=900, height=500)
+
+                if export_data:
+                    df_export = pd.DataFrame(export_data)
+                    csv_data = df_export.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 Download Routing Schedule (CSV)",
+                        data=csv_data,
+                        file_name="routing_schedule.csv",
+                        mime="text/csv",
+                    )
 
                 with st.expander(_t("expander_title")):
                     for text in routes_text:
