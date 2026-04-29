@@ -1,7 +1,6 @@
 # 🚚 School Lunch Delivery Routing Optimization (学校給食 配送ルート最適化デモ)
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app-url.streamlit.app/)
-*(Please replace the URL above with your actual Streamlit Cloud URL after deployment)*
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://school-lunch-routing-opt-xn7z9qq5mrxqrafb8px7ly.streamlit.app/)
 
 This project is a web-based simulation application that solves the **Multi-Depot Vehicle Routing Problem with Time Windows (MDVRPTW)**. It is specifically designed around a real-world business scenario: optimizing the school lunch delivery network for 28 schools in Tachikawa City, Tokyo.
 
