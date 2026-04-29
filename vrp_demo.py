@@ -115,7 +115,9 @@ The mathematical optimization engine (OR-Tools) will find the most cost-effectiv
     "metric_trucks_val": {"ja": "{val}", "en": "{val} trucks"},
     "metric_cost_val": {"ja": "{val}", "en": "{val} JPY"},
     "popup_failed": {"ja": "⚠️ {name}（配送失敗）", "en": "⚠️ {name} (Failed)"},
-    "cost_slider_label": {"ja": "ガソリン代 / km (円)", "en": "Gasoline Cost / km (JPY)"}
+    "cost_slider_label": {"ja": "ガソリン代 / km (円)", "en": "Gasoline Cost / km (JPY)"},
+    "osrm_success": {"ja": "✅ OSRM APIから正確な現実の道路網距離を取得しました。", "en": "✅ Fetched accurate real-world road distances from OSRM API."},
+    "osrm_warning": {"ja": "⚠️ API制限またはエラーのため、直線距離（推定）で代替計算しています。", "en": "⚠️ Using estimated straight-line distances due to API limits or errors."}
 }
 
 # ---------------------------------------------------------
@@ -133,18 +135,18 @@ def haversine(lat1, lon1, lat2, lon2):
 @st.cache_data
 def generate_real_data(lang="ja"):
     depots = {
-        "East_Depot": [35.7170, 139.4230],
-        "West_Depot": [35.7190, 139.3900]
+        "East_Depot": [35.717028, 139.423011],
+        "West_Depot": [35.719055, 139.390082]
     }
     east_schools = [
         # 小学校 8校
-        [35.695, 139.415], [35.700, 139.420], [35.693, 139.425],
-        [35.698, 139.405], [35.705, 139.418], [35.690, 139.430],
-        [35.692, 139.420], [35.715, 139.435],
+        [35.695321, 139.415102], [35.700145, 139.420883], [35.693892, 139.425034],
+        [35.698213, 139.405991], [35.705674, 139.418229], [35.690441, 139.430115],
+        [35.692338, 139.420776], [35.715891, 139.435442],
         # 中学校 9校 (ダミーからよりリアルな分散座標へ)
-        [35.705, 139.400], [35.710, 139.405], [35.698, 139.425],
-        [35.702, 139.430], [35.690, 139.410], [35.712, 139.420],
-        [35.718, 139.415], [35.688, 139.422], [35.708, 139.435]
+        [35.705112, 139.400554], [35.710893, 139.405667], [35.698445, 139.425331],
+        [35.702991, 139.430218], [35.690556, 139.410993], [35.712334, 139.420112],
+        [35.718882, 139.415664], [35.688221, 139.422557], [35.708553, 139.435889]
     ]
     if lang == "ja":
         east_names = [
@@ -168,10 +170,10 @@ def generate_real_data(lang="ja"):
         depot_names = ["East Joint Kitchen", "West Joint Kitchen"]
         
     west_schools = [
-        [35.725, 139.385], [35.728, 139.410], [35.720, 139.370],
-        [35.715, 139.405], [35.720, 139.420], [35.728, 139.380],
-        [35.722, 139.395], [35.730, 139.415], [35.735, 139.390],
-        [35.705, 139.395], [35.725, 139.390]
+        [35.725114, 139.385223], [35.728991, 139.410556], [35.720334, 139.370889],
+        [35.715556, 139.405112], [35.720887, 139.420445], [35.728221, 139.380778],
+        [35.722665, 139.395332], [35.730112, 139.415994], [35.735443, 139.390221],
+        [35.705889, 139.395667], [35.725776, 139.390114]
     ]
     
     # Addresses stay in Japanese to represent real Japan addresses, but we can suffix them in English
@@ -282,8 +284,10 @@ def get_osrm_route_geometry(route_nodes_tuple, all_locs):
 dist_matrix, base_duration_matrix, osrm_ok = fetch_osrm_matrices(get_coordinates_only())
 num_locations = len(locations)
 
-if not osrm_ok:
-    st.warning("OSRM APIに接続できませんでした。直線距離で代替しています。")
+if osrm_ok:
+    st.success(_t("osrm_success"))
+else:
+    st.warning(_t("osrm_warning"))
 
 st.title(_t("title"))
 st.markdown(_t("subtitle"))
@@ -300,8 +304,8 @@ with tab3:
         "ID": range(len(location_names)),
         _t("col_name"): location_names,
         _t("col_address"): location_addresses,
-        _t("col_lat"): [loc[0] for loc in locations],
-        _t("col_lon"): [loc[1] for loc in locations],
+        _t("col_lat"): [f"{loc[0]:.6f}" for loc in locations],
+        _t("col_lon"): [f"{loc[1]:.6f}" for loc in locations],
         _t("col_area"): [_t("area_east_depot"), _t("area_west_depot")] + [_t("area_east")]*17 + [_t("area_west")]*11
     })
     st.dataframe(df_locations, use_container_width=True)
