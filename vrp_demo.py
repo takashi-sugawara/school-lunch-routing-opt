@@ -6,6 +6,7 @@ import folium
 from streamlit_folium import st_folium
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
+import requests
 
 # ---------------------------------------------------------
 # 0. 多言語対応 (i18n) 辞書
@@ -84,7 +85,7 @@ The mathematical optimization engine (OR-Tools) will find the most cost-effectiv
     "kpi_trucks_sub": {"ja": "用意した {total}台中", "en": "{total} trucks available"},
     "kpi_drop_title": {"ja": "⚠️ 配送失敗(遅延)校数", "en": "⚠️ Failed Deliveries (Delayed)"},
     "kpi_drop_sub": {"ja": "時間枠に間に合いません", "en": "Missed Time Window"},
-    "drop_error": {"ja": "以下の学校は11:30の期限に間に合わないため配送を断念しました: {schools}", "en": "Delivery was abandoned for the following schools due to time constraints: {schools}"},
+    "drop_error": {"ja": "以下の学校は配送できませんでした（原因: トラック不足、時間制約過剰、または地理的偏り）: {schools}", "en": "Delivery abandoned for the following schools (Causes: Truck shortage, strict time windows, or geographic bias): {schools}"},
     "kpi_success_title": {"ja": "✨ 配送完了校数", "en": "✨ Successful Deliveries"},
     "kpi_success_sub": {"ja": "全校 11:30までに完了！", "en": "All 28 schools delivered by 11:30!"},
     "kpi_dist": {"ja": "総走行距離", "en": "Total Distance"},
@@ -112,7 +113,9 @@ The mathematical optimization engine (OR-Tools) will find the most cost-effectiv
     "log_return": {"ja": "帰還", "en": "Return"},
     "log_truck": {"ja": "**🚚 [{depot_name}] トラック {v_id}** : ", "en": "**🚚 [{depot_name}] Truck {v_id}** : "},
     "metric_trucks_val": {"ja": "{val}", "en": "{val} trucks"},
-    "metric_cost_val": {"ja": "{val}", "en": "{val} JPY"}
+    "metric_cost_val": {"ja": "{val}", "en": "{val} JPY"},
+    "popup_failed": {"ja": "⚠️ {name}（配送失敗）", "en": "⚠️ {name} (Failed)"},
+    "cost_slider_label": {"ja": "ガソリン代 / km (円)", "en": "Gasoline Cost / km (JPY)"}
 }
 
 # ---------------------------------------------------------
@@ -222,18 +225,65 @@ def _t(key, **kwargs):
 locations, location_names, location_addresses = generate_real_data(lang)
 
 @st.cache_data
-def compute_distance_matrix(locs):
+def fetch_osrm_matrices(locs):
     n = len(locs)
-    mat = np.zeros((n, n))
+    dist_mat = np.zeros((n, n))
+    dur_mat = np.zeros((n, n))
+    
+    coords_str = ";".join([f"{lon},{lat}" for lat, lon in locs])
+    url = f"http://router.project-osrm.org/table/v1/driving/{coords_str}?annotations=duration,distance"
+    
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data.get("code") == "Ok" and "distances" in data and "durations" in data:
+            for i in range(n):
+                for j in range(n):
+                    # meters to km, seconds to minutes
+                    dist_mat[i][j] = data["distances"][i][j] / 1000.0
+                    dur_mat[i][j] = data["durations"][i][j] / 60.0
+            return dist_mat, dur_mat, True
+    except Exception:
+        pass
+        
+    # Fallback to haversine if API fails or blocks
+    FALLBACK_SPEED_KM_PER_H = 20.0
     for i in range(n):
         for j in range(n):
             if i == j: continue
-            mat[i][j] = haversine(locs[i][0], locs[i][1], locs[j][0], locs[j][1]) * 1.3
-    return mat
+            d = haversine(locs[i][0], locs[i][1], locs[j][0], locs[j][1]) * 1.3
+            dist_mat[i][j] = d
+            dur_mat[i][j] = (d / FALLBACK_SPEED_KM_PER_H) * 60.0
+    return dist_mat, dur_mat, False
 
-# キャッシュして再計算を防ぐ（ミュータブルなリストの代わりにタプルを渡す）
-dist_matrix = compute_distance_matrix(tuple(map(tuple, locations)))
+@st.cache_data
+def get_coordinates_only():
+    data, _, _ = generate_real_data("ja")  # 座標データ自体は言語共通
+    return tuple(map(tuple, data))
+
+@st.cache_data
+def get_osrm_route_geometry(route_nodes_tuple, all_locs):
+    locs = [all_locs[n] for n in route_nodes_tuple]
+    coords_str = ";".join([f"{lon},{lat}" for lat, lon in locs])
+    url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}?geometries=geojson&overview=full"
+    try:
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if data.get("code") == "Ok":
+            # geojson coordinates are [lon, lat], folium expects [lat, lon]
+            geom = data["routes"][0]["geometry"]["coordinates"]
+            return [[lat, lon] for lon, lat in geom]
+    except Exception:
+        pass
+    # OSRM失敗時やタイムアウト時は、ノード座標をそのまま返す（地図上では直線で描画される）
+    return locs
+
+# OSRM APIを利用して現実の道路網に基づく距離・時間マトリックスを取得し、キャッシュ
+dist_matrix, base_duration_matrix, osrm_ok = fetch_osrm_matrices(get_coordinates_only())
 num_locations = len(locations)
+
+if not osrm_ok:
+    st.warning("OSRM APIに接続できませんでした。直線距離で代替しています。")
 
 st.title(_t("title"))
 st.markdown(_t("subtitle"))
@@ -268,6 +318,7 @@ st.sidebar.markdown(_t("trucks_header"))
 num_east_trucks = st.sidebar.slider(_t("east_slider"), min_value=5, max_value=15, value=12)
 num_west_trucks = st.sidebar.slider(_t("west_slider"), min_value=3, max_value=10, value=8)
 search_time_limit = st.sidebar.slider(_t("search_time_slider"), min_value=1, max_value=10, value=3)
+cost_per_km = st.sidebar.number_input(_t("cost_slider_label"), min_value=10, max_value=100, value=32)
 
 
 
@@ -280,15 +331,13 @@ if st.session_state.run_opt:
         # 3. マトリックス計算とOR-Toolsモデル構築
         time_matrix = np.zeros((num_locations, num_locations), dtype=int)
         
-        SPEED_KM_PER_H = 20.0 
         SERVICE_TIME = 10 
         
         for i in range(num_locations):
             for j in range(num_locations):
                 if i == j: continue
-                dist_km = dist_matrix[i][j]
-                
-                travel_time = (dist_km / SPEED_KM_PER_H) * 60 * weather_multiplier
+                # OSRMの基準所要時間に、天候倍率を掛ける
+                travel_time = base_duration_matrix[i][j] * weather_multiplier
                 service = SERVICE_TIME if i >= 2 else 0
                 time_matrix[i][j] = int(travel_time + service)
 
@@ -353,6 +402,7 @@ if st.session_state.run_opt:
             routes_text = []
             map_polylines = []
             visited_nodes = set()
+            school_labels = {}
             
             for vehicle_id in range(num_vehicles):
                 index = routing.Start(vehicle_id)
@@ -369,11 +419,14 @@ if st.session_state.run_opt:
                 
                 route_log = _t("log_truck", depot_name=depot_name, v_id=vehicle_id + 1)
                 
+                order = 1
                 while not routing.IsEnd(index):
                     node = manager.IndexToNode(index)
                     route_nodes.append(node)
                     if node >= 2:
                         visited_nodes.add(node)
+                        school_labels[node] = f"{vehicle_id+1}-{order}"
+                        order += 1
                     
                     time_var = time_dimension.CumulVar(index)
                     arr_min = solution.Min(time_var)
@@ -402,21 +455,36 @@ if st.session_state.run_opt:
                 routes_text.append(route_log)
                 total_dist_optimized += route_dist
                 
-                poly_coords = [locations[n] for n in route_nodes]
-                map_polylines.append((poly_coords, color))
+                # 直線ではなく実際の道路経路を取得して描画（セッションキャッシュ活用）
+                if "route_geometry_cache" not in st.session_state:
+                    st.session_state.route_geometry_cache = {}
+                
+                cache_key = tuple(route_nodes)
+                if cache_key not in st.session_state.route_geometry_cache:
+                    st.session_state.route_geometry_cache[cache_key] = \
+                        get_osrm_route_geometry(cache_key, get_coordinates_only())
+                
+                road_coords = st.session_state.route_geometry_cache[cache_key]
+                is_road = len(road_coords) > len(route_nodes)  # 経由点が増えていればOSRM成功（道路経路）
+                map_polylines.append((road_coords, color, is_road))
                 
             all_schools = set(range(2, len(locations)))
             dropped_schools = all_schools - visited_nodes
             
+            # ベースライン計算（容量2を考慮し、2件ずつペアで巡回するナイーブな配送モデル）
             baseline_dist = 0.0
-            for i in range(2, 19): 
-                baseline_dist += dist_matrix[0][i] * 2
-            for i in range(19, 30): 
-                baseline_dist += dist_matrix[1][i] * 2
+            # 東エリア (2〜18)
+            for i in range(2, 18, 2):
+                baseline_dist += dist_matrix[0][i] + dist_matrix[i][i+1] + dist_matrix[i+1][0]
+            baseline_dist += dist_matrix[0][18] * 2  # 余りの1校はピストン
+            
+            # 西エリア (19〜29)
+            for i in range(19, 29, 2):
+                baseline_dist += dist_matrix[1][i] + dist_matrix[i][i+1] + dist_matrix[i+1][1]
+            baseline_dist += dist_matrix[1][29] * 2  # 余りの1校はピストン
                 
-            COST_PER_KM = 32
-            base_cost = baseline_dist * COST_PER_KM
-            opt_cost = total_dist_optimized * COST_PER_KM
+            base_cost = baseline_dist * cost_per_km
+            opt_cost = total_dist_optimized * cost_per_km
             savings_per_day = max(0, base_cost - opt_cost)
             savings_per_year = savings_per_day * 200
 
@@ -444,15 +512,24 @@ if st.session_state.run_opt:
 
                 m = folium.Map(location=[35.710, 139.405], zoom_start=13)
                 
-                for coords, color in map_polylines:
-                    folium.PolyLine(coords, color=color, weight=3, opacity=0.8).add_to(m)
+                for coords, color, is_road in map_polylines:
+                    folium.PolyLine(coords, color=color, weight=3, opacity=0.8, dash_array=None if is_road else "5 5").add_to(m)
 
                 folium.Marker(locations[0], popup=location_names[0], icon=folium.Icon(color="red", icon="home")).add_to(m)
                 folium.Marker(locations[1], popup=location_names[1], icon=folium.Icon(color="blue", icon="home")).add_to(m)
-                for i, loc in enumerate(locations[2:19]):
-                    folium.CircleMarker(loc, radius=6, color="red", fill=True, fill_opacity=1.0, popup=location_names[i+2]).add_to(m)
-                for i, loc in enumerate(locations[19:30]):
-                    folium.CircleMarker(loc, radius=6, color="blue", fill=True, fill_opacity=1.0, popup=location_names[i+19]).add_to(m)
+                for i, loc in enumerate(locations[2:30]):
+                    node = i + 2
+                    color = "red" if node < 19 else "blue"
+                    label = school_labels.get(node, "")
+                    if label:
+                        html = f'<div style="background-color: {color}; color: white; border-radius: 12px; width: 32px; height: 24px; text-align: center; line-height: 24px; font-size: 8pt; font-weight: bold; border: 1px solid white;">{label}</div>'
+                        folium.Marker(loc, popup=location_names[node], icon=folium.DivIcon(html=html, icon_anchor=(16, 12))).add_to(m)
+                    else:
+                        is_dropped = node in dropped_schools
+                        marker_color = "gray" if is_dropped else color
+                        opacity = 0.4 if is_dropped else 1.0
+                        popup_text = _t("popup_failed", name=location_names[node]) if is_dropped else location_names[node]
+                        folium.CircleMarker(loc, radius=6, color=marker_color, fill=True, fill_opacity=opacity, popup=popup_text).add_to(m)
                 
                 st_folium(m, width=900, height=500)
 
@@ -467,8 +544,8 @@ else:
         m = folium.Map(location=[35.710, 139.405], zoom_start=13)
         folium.Marker(locations[0], popup=location_names[0], icon=folium.Icon(color="red", icon="home")).add_to(m)
         folium.Marker(locations[1], popup=location_names[1], icon=folium.Icon(color="blue", icon="home")).add_to(m)
-        for i, loc in enumerate(locations[2:19]):
-            folium.CircleMarker(loc, radius=6, color="red", fill=True, popup=location_names[i+2]).add_to(m)
-        for i, loc in enumerate(locations[19:30]):
-            folium.CircleMarker(loc, radius=6, color="blue", fill=True, popup=location_names[i+19]).add_to(m)
+        for i, loc in enumerate(locations[2:30]):
+            node = i + 2
+            color = "red" if node < 19 else "blue"
+            folium.CircleMarker(loc, radius=6, color=color, fill=True, popup=location_names[node]).add_to(m)
         st_folium(m, width=900, height=500)
